@@ -1,9 +1,13 @@
-"""从 samples/demo.fa 生成两份演示 VCF（坐标由参考序列自动计算，保证 REF 合法）。
+"""从 samples/demo.fa 生成演示 VCF（坐标由参考序列自动计算，保证 REF 合法）。
 
 运行：python3 scripts/make_demo.py
-场景覆盖：
-  SNV 一致 / 同一插入的不同写法 / 同一缺失的不同写法 / 多 ALT /
-  剂量不符 / 仅单侧出现 / 剂量 0 被忽略
+产物：
+  samples/caller_a.vcf / caller_b.vcf  双 VCF 核对演示（未分相 GT）
+    场景覆盖：SNV 一致 / 同一插入的不同写法 / 同一缺失的不同写法 / 多 ALT /
+    剂量不符 / 仅单侧出现 / 剂量 0 被忽略
+  samples/phased_demo.vcf              单倍型生成演示（分相 GT + PS）
+    场景覆盖：1|0 与 0|1 杂合（同 PS）/ 1|1 纯合 / 0|0 忽略 /
+    同一缺失在重复区的写法 / 分属不同拷贝的交叠调用
 """
 
 import sys
@@ -17,6 +21,10 @@ ROOT = Path(__file__).resolve().parent.parent
 HEADER = (
     "##fileformat=VCFv4.2\n"
     "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSAMPLE\n"
+)
+PHASED_HEADER = (
+    "##fileformat=VCFv4.2\n"
+    "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tDEMO\n"
 )
 
 
@@ -32,6 +40,13 @@ def row(pos, ref, alt, gt, extra_fmt=None):
     fmt = "GT" if extra_fmt is None else "GT:DP"
     sample = gt if extra_fmt is None else f"{gt}:{extra_fmt}"
     return f"chrDemo\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\t{fmt}\t{sample}"
+
+
+def prow(pos, ref, alt, gt, ps=None):
+    """分相演示记录；杂合行带 GT:PS，纯合 / 0|0 行只带 GT。"""
+    if ps is None:
+        return f"chrDemo\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT\t{gt}"
+    return f"chrDemo\t{pos}\t.\t{ref}\t{alt}\t.\tPASS\t.\tGT:PS\t{gt}:{ps}"
 
 
 def main() -> None:
@@ -96,5 +111,45 @@ def main() -> None:
     print(f"wrote {len(rows_b)} records -> samples/caller_b.vcf")
 
 
+def main_phased() -> None:
+    ref = parse_fasta((ROOT / "samples" / "demo.fa").read_bytes())
+    seq = ref.sequence
+    ps = 100  # 全部杂合调用共用一个相位集
+
+    rows: list[str] = []
+
+    # 1) 杂合 SNV：拷贝 1 / 拷贝 2 各一个
+    p = find(seq, "ACGTAC")
+    rows.append(prow(p + 1, "C", "G", "1|0", ps))   # 拷贝 1
+    rows.append(prow(p + 5, "C", "T", "0|1", ps))   # 拷贝 2
+
+    # 2) 杂合插入（纯 A 重复区，写法会被左对齐归一）：拷贝 2
+    a_run = find(seq, "AAAA")
+    anchor_pos = a_run - 1
+    anchor = seq[anchor_pos - 1]
+    rows.append(prow(anchor_pos, anchor, anchor + "A", "0|1", ps))
+
+    # 3) 杂合缺失（AT 重复区删一个 AT）：拷贝 1，跨度含锚点共 3 bp
+    at_run = find(seq, "ATATATAT")
+    rows.append(prow(at_run - 1, seq[at_run - 2] + "AT", seq[at_run - 2], "1|0", ps))
+
+    # 4) 与 3) 跨度交叠但分属拷贝 2 的 SNV：仍可正常生成
+    rows.append(prow(at_run + 1, "T", "C", "0|1", ps))
+
+    # 5) 纯合 SNV：两条拷贝都编辑（不要求 PS）
+    p = find(seq, "GCGC")
+    rows.append(prow(p + 1, "C", "A", "1|1"))
+
+    # 6) 0|0 记录：完成校验但不产生任何编辑
+    p = find(seq, "GGATCC")
+    rows.append(prow(p + 2, "A", "G", "0|0"))
+
+    (ROOT / "samples" / "phased_demo.vcf").write_text(
+        PHASED_HEADER + "\n".join(rows) + "\n", encoding="utf-8"
+    )
+    print(f"wrote {len(rows)} records -> samples/phased_demo.vcf")
+
+
 if __name__ == "__main__":
     main()
+    main_phased()

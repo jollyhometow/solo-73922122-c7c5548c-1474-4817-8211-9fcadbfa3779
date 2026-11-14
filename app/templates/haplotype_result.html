@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}单倍型生成结果 · 变异核对与单倍型生成{% endblock %}
+{% block body %}
+<div class="card">
+  <h2>生成概览</h2>
+  <div class="meta">
+    <span class="pill">参考：{{ ref_name }}（{{ ref_length }} bp）</span>
+    <span class="pill">样本：{{ sample }}</span>
+    {% if ps %}<span class="pill">相位集 PS：{{ ps }}</span>{% endif %}
+  </div>
+  <div class="summary">
+    <div class="stat"><div class="num">{{ calls|length }}</div><div class="lbl">应用的变异调用</div></div>
+    <div class="stat"><div class="num">{{ n_copy1 }}</div><div class="lbl">拷贝 1 变异数（{{ hap1_len }} bp）</div></div>
+    <div class="stat"><div class="num">{{ n_copy2 }}</div><div class="lbl">拷贝 2 变异数（{{ hap2_len }} bp）</div></div>
+  </div>
+  <p>
+    <a class="dlbtn" href="/haplotype/download/{{ token }}/1">下载拷贝 1 FASTA（{{ sample }}_hap1.fa）</a>
+    <a class="dlbtn hap2" href="/haplotype/download/{{ token }}/2">下载拷贝 2 FASTA（{{ sample }}_hap2.fa）</a>
+  </p>
+  <p class="muted" style="font-size:13px">下载链接 {{ ttl_minutes }} 分钟内有效；两条序列均已按原参考坐标完成全部编辑。</p>
+  <p><a class="back" href="/">← 返回重新上传</a></p>
+</div>
+
+<div class="card">
+  <h2>应用的变异（按参考坐标排序）<span class="section-badge b-ok">{{ calls|length }}</span></h2>
+  {% if calls %}
+  <table>
+    <thead>
+      <tr>
+        <th style="width:90px">类型</th>
+        <th style="width:200px">归一变异（位置:REF→ALT）</th>
+        <th>原始记录（POS:REF&gt;ALT，行号）</th>
+        <th style="width:80px">拷贝 1</th>
+        <th style="width:80px">拷贝 2</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for c in calls|sort(attribute="variant.pos") %}
+      <tr>
+        <td><span class="tag {{ c.variant.kind }}">{{ c.variant.kind }}</span></td>
+        <td class="mono">{{ c.variant.label }}</td>
+        <td class="mono">{{ c.raw }}<span class="muted">（第 {{ c.line_no }} 行）</span></td>
+        <td>{% if c.on_copy1 %}✓{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if c.on_copy2 %}✓{% else %}<span class="muted">—</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">VCF 中没有需要应用的变异，两条单倍型序列与参考一致。</div>
+  {% endif %}
+</div>
+{% endblock %}

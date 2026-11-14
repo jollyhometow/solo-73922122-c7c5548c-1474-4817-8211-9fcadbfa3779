@@ -205,87 +205,18 @@ def parse_diploid_gt(gt: str, line_no: int, n_alt: int) -> dict[int, int]:
 
 
 # --------------------------------------------------------------------------- #
-# VCF
+# VCF 共用解析件（核对流程与 haplo 单倍型流程共用）
 # --------------------------------------------------------------------------- #
-def _parse_record(
-    fields: list[str], line_no: int, refobj: Reference
-) -> dict[Variant, int]:
-    """解析一条 VCF 数据行，返回该行内 {归一变异: 剂量}（已剔除剂量 0 并在记录内聚合）。"""
-    if len(fields) < 8:
-        raise CheckError(f"第 {line_no} 行：列数不足 8 列，不是合法 VCF 记录。")
-
-    chrom, pos_s, _vid, ref, alt_s, _qual, _filt, info = fields[:8]
-    if chrom != refobj.name:
-        raise CheckError(
-            f"第 {line_no} 行：CHROM={chrom!r} 与参考 FASTA 名称 {refobj.name!r} 不一致。"
-        )
-
+def decode_text(data: bytes, filename: str) -> str:
+    """按 UTF-8 解码上传文本。"""
     try:
-        pos = int(pos_s)
-    except ValueError:
-        raise CheckError(f"第 {line_no} 行：POS={pos_s!r} 不是整数。")
-    if pos < 1 or pos > len(refobj.sequence):
-        raise CheckError(
-            f"第 {line_no} 行：POS={pos} 超出参考范围（参考长度 {len(refobj.sequence)}）。"
-        )
-
-    if not ref or any(ch not in _BASES for ch in ref):
-        raise CheckError(
-            f"第 {line_no} 行：REF 等位 {ref!r} 不是纯 A/C/G/T 序列。"
-        )
-    alts = alt_s.split(",")
-    if any(not a or any(ch not in _BASES for ch in a) for a in alts):
-        raise CheckError(
-            f"第 {line_no} 行：ALT {alt_s!r} 中存在空值或非 A/C/G/T 字符"
-            "（本工具不接受 *、<DEL>、符号化等位及缺失占位）。"
-        )
-
-    end = pos + len(ref) - 1
-    if end > len(refobj.sequence):
-        raise CheckError(
-            f"第 {line_no} 行：REF 延伸至 {end}，超出参考长度 {len(refobj.sequence)}。"
-        )
-    ref_sub = refobj.sequence[pos - 1:end]
-    if ref_sub != ref:
-        raise CheckError(
-            f"第 {line_no} 行：REF={ref} 与参考序列在 pos={pos} 处的 {ref_sub} 不一致，"
-            "整次核对失败。"
-        )
-
-    # FORMAT/GT
-    if len(fields) == 8:
-        raise CheckError(f"第 {line_no} 行：缺少 FORMAT 与样本列，本工具要求单样本二倍体 GT。")
-    fmt = fields[8]
-    fmt_keys = fmt.split(":")
-    if not fmt_keys or fmt_keys[0] != "GT":
-        raise CheckError(f"第 {line_no} 行：FORMAT 必须以 GT 开头，实际为 {fmt!r}。")
-    sample = fields[9]
-    sample_values = sample.split(":")
-    if len(sample_values) > len(fmt_keys):
-        raise CheckError(f"第 {line_no} 行：样本列的子字段多于 FORMAT 定义。")
-    gt = sample_values[0] if sample_values else ""
-    dosages = parse_diploid_gt(gt, line_no, len(alts))
-
-    # 同一记录中不同 ALT 归一后可能指向同一变异（如重复区里的等价写法），
-    # 先在记录内聚合剂量；二倍体单条记录的剂量不可能超过 2。
-    per_record: dict[Variant, int] = {}
-    for alt_idx, dose in dosages.items():
-        alt = alts[alt_idx - 1]
-        npos, nref, nalt = normalize(pos, ref, alt, refobj.sequence)
-        kind = classify(nref, nalt)  # 同时承担长度与形态校验
-        variant = Variant(npos, nref, nalt, kind)
-        per_record[variant] = per_record.get(variant, 0) + dose
-    return per_record
-
-
-def parse_vcf(data: bytes, filename: str, refobj: Reference) -> dict[Variant, Call]:
-    """解析单样本 VCF，返回 {归一变异: Call}。任何硬性错误都抛出 CheckError。"""
-    try:
-        text = data.decode("utf-8")
+        return data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise CheckError(f"{filename} 不是 UTF-8 文本（字节 {exc.start} 处解码失败）。")
 
-    lines = text.splitlines()
+
+def parse_vcf_header(lines: list[str], filename: str) -> tuple[int, str]:
+    """定位 '#CHROM' 表头行并校验恰好一个样本列，返回 (表头行索引, 样本名)。"""
     header_idx = -1
     for i, line in enumerate(lines):
         if line.startswith("#CHROM"):
@@ -305,7 +236,104 @@ def parse_vcf(data: bytes, filename: str, refobj: Reference) -> dict[Variant, Ca
             f"{filename}：'#CHROM' 表头有 {len(header_fields) - 9} 个样本列，"
             "本工具仅接受单样本 VCF。"
         )
-    sample_name = header_fields[9]
+    return header_idx, header_fields[9]
+
+
+def validate_locus(fields: list[str], line_no: int, refobj: Reference) -> tuple[int, str]:
+    """校验一条记录的 CHROM/POS/REF 与参考一致，返回 (1-based pos, REF)。"""
+    if len(fields) < 8:
+        raise CheckError(f"第 {line_no} 行：列数不足 8 列，不是合法 VCF 记录。")
+
+    chrom, pos_s, ref = fields[0], fields[1], fields[3]
+    if chrom != refobj.name:
+        raise CheckError(
+            f"第 {line_no} 行：CHROM={chrom!r} 与参考 FASTA 名称 {refobj.name!r} 不一致。"
+        )
+
+    try:
+        pos = int(pos_s)
+    except ValueError:
+        raise CheckError(f"第 {line_no} 行：POS={pos_s!r} 不是整数。")
+    if pos < 1 or pos > len(refobj.sequence):
+        raise CheckError(
+            f"第 {line_no} 行：POS={pos} 超出参考范围（参考长度 {len(refobj.sequence)}）。"
+        )
+
+    if not ref or any(ch not in _BASES for ch in ref):
+        raise CheckError(
+            f"第 {line_no} 行：REF 等位 {ref!r} 不是纯 A/C/G/T 序列。"
+        )
+
+    end = pos + len(ref) - 1
+    if end > len(refobj.sequence):
+        raise CheckError(
+            f"第 {line_no} 行：REF 延伸至 {end}，超出参考长度 {len(refobj.sequence)}。"
+        )
+    ref_sub = refobj.sequence[pos - 1:end]
+    if ref_sub != ref:
+        raise CheckError(
+            f"第 {line_no} 行：REF={ref} 与参考序列在 pos={pos} 处的 {ref_sub} 不一致。"
+        )
+    return pos, ref
+
+
+def check_alt_bases(alt_s: str, line_no: int) -> None:
+    """校验 ALT（可含逗号分隔的多个等位）只由 A/C/G/T 构成。"""
+    alts = alt_s.split(",")
+    if any(not a or any(ch not in _BASES for ch in a) for a in alts):
+        raise CheckError(
+            f"第 {line_no} 行：ALT {alt_s!r} 中存在空值或非 A/C/G/T 字符"
+            "（本工具不接受 *、<DEL>、符号化等位及缺失占位）。"
+        )
+
+
+def split_format_sample(fields: list[str], line_no: int) -> tuple[list[str], list[str]]:
+    """拆分 FORMAT 键与样本值；要求记录含 FORMAT+样本列且 FORMAT 以 GT 开头。"""
+    if len(fields) == 8:
+        raise CheckError(f"第 {line_no} 行：缺少 FORMAT 与样本列，本工具要求单样本二倍体 GT。")
+    fmt = fields[8]
+    fmt_keys = fmt.split(":")
+    if not fmt_keys or fmt_keys[0] != "GT":
+        raise CheckError(f"第 {line_no} 行：FORMAT 必须以 GT 开头，实际为 {fmt!r}。")
+    sample_values = fields[9].split(":")
+    if len(sample_values) > len(fmt_keys):
+        raise CheckError(f"第 {line_no} 行：样本列的子字段多于 FORMAT 定义。")
+    return fmt_keys, sample_values
+
+
+# --------------------------------------------------------------------------- #
+# VCF
+# --------------------------------------------------------------------------- #
+def _parse_record(
+    fields: list[str], line_no: int, refobj: Reference
+) -> dict[Variant, int]:
+    """解析一条 VCF 数据行，返回该行内 {归一变异: 剂量}（已剔除剂量 0 并在记录内聚合）。"""
+    pos, ref = validate_locus(fields, line_no, refobj)
+    alt_s = fields[4]
+    check_alt_bases(alt_s, line_no)
+    alts = alt_s.split(",")
+
+    fmt_keys, sample_values = split_format_sample(fields, line_no)
+    gt = sample_values[0] if sample_values else ""
+    dosages = parse_diploid_gt(gt, line_no, len(alts))
+
+    # 同一记录中不同 ALT 归一后可能指向同一变异（如重复区里的等价写法），
+    # 先在记录内聚合剂量；二倍体单条记录的剂量不可能超过 2。
+    per_record: dict[Variant, int] = {}
+    for alt_idx, dose in dosages.items():
+        alt = alts[alt_idx - 1]
+        npos, nref, nalt = normalize(pos, ref, alt, refobj.sequence)
+        kind = classify(nref, nalt)  # 同时承担长度与形态校验
+        variant = Variant(npos, nref, nalt, kind)
+        per_record[variant] = per_record.get(variant, 0) + dose
+    return per_record
+
+
+def parse_vcf(data: bytes, filename: str, refobj: Reference) -> tuple[dict[Variant, Call], str]:
+    """解析单样本 VCF，返回 ({归一变异: Call}, 样本名)。任何硬性错误都抛出 CheckError。"""
+    text = decode_text(data, filename)
+    lines = text.splitlines()
+    header_idx, sample_name = parse_vcf_header(lines, filename)
 
     calls: dict[Variant, Call] = {}
     for offset, raw in enumerate(lines[header_idx + 1:], start=header_idx + 2):

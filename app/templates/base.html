@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}双 VCF 变异核对{% endblock %}</title>
+  <title>{% block title %}变异核对与单倍型生成{% endblock %}</title>
   <style>
     :root {
       --bg: #f5f7fa; --card: #ffffff; --ink: #1f2933; --muted: #6b7280;
@@ -31,11 +31,13 @@
       display: block; width: 100%; margin-top: 6px; padding: 10px;
       border: 1px dashed var(--line); border-radius: 8px; background: #fafbfc;
     }
-    button {
+    button, a.dlbtn {
       background: var(--accent); color: #fff; border: 0; border-radius: 8px;
       padding: 11px 26px; font-size: 15px; font-weight: 600; cursor: pointer;
+      text-decoration: none; display: inline-block;
     }
-    button:hover { filter: brightness(1.08); }
+    button:hover, a.dlbtn:hover { filter: brightness(1.08); }
+    a.dlbtn.hap2 { background: var(--ok); }
     .alert {
       border-radius: 10px; padding: 14px 18px; margin-bottom: 20px;
       border: 1px solid; font-weight: 600;
@@ -80,8 +82,8 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>双 VCF 变异核对</h1>
-    <p>同一参考、同一样本，两套变异识别程序结果复查工具</p>
+    <h1>变异核对与单倍型生成</h1>
+    <p>双 VCF 结果核对 · 分相变异生成两条单倍型样本序列</p>
   </header>
   {% block body %}{% endblock %}
 </div>

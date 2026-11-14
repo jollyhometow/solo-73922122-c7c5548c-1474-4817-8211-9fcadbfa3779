@@ -2,13 +2,13 @@
 {% block body %}
 {% if error %}
 <div class="alert error">
-  核对失败：{{ error }}<br>
-  <span style="font-weight:400;font-size:13.5px">按要求本次不展示任何局部结论，请修正输入后重新上传。</span>
+  {{ error_title or "处理失败" }}：{{ error }}<br>
+  <span style="font-weight:400;font-size:13.5px">按要求本次不交付任何局部结果，请修正输入后重新上传。</span>
 </div>
 {% endif %}
 
 <div class="card">
-  <h2>上传文件</h2>
+  <h2>双 VCF 变异核对</h2>
   <form action="/compare" method="post" enctype="multipart/form-data">
     <label class="field">
       单条染色体参考 FASTA
@@ -29,13 +29,39 @@
   </form>
 </div>
 
+<div class="card">
+  <h2>单倍型 FASTA 生成</h2>
+  <form action="/haplotype" method="post" enctype="multipart/form-data">
+    <label class="field">
+      单条染色体参考 FASTA
+      <span class="hint">（纯 A/C/G/T，不超过 {{ fasta_limit_kib }} KiB）</span>
+      <input type="file" name="fasta" accept=".fa,.fasta,.fna,text/plain" required>
+    </label>
+    <label class="field">
+      分相单样本 VCF
+      <span class="hint">（单 ALT、二倍体分相 GT、杂合带相同 PS；不超过 {{ vcf_limit_kib }} KiB）</span>
+      <input type="file" name="vcf" accept=".vcf,text/plain" required>
+    </label>
+    <button type="submit">生成两条单倍型序列</button>
+  </form>
+</div>
+
 <div class="card rules">
   <h2 style="color:var(--ink)">接收与判定规则</h2>
+  <p style="margin:0 0 4px"><strong>双 VCF 核对</strong></p>
   <ul>
     <li>仅接受 A/C/G/T 构成的<strong>单碱基替换</strong>，以及事件长度不超过 20 bp 的<strong>纯插入 / 纯缺失</strong>；其他形态（MNV、符号化 ALT、* 等）直接判失败。</li>
     <li>GT 必须为<strong>非缺失、未分相的二倍体</strong>（形如 <span class="mono">0/1</span>、<span class="mono">1/1</span>，多 ALT 可为 <span class="mono">1/2</span>）；按 GT 分别计算各 ALT 的 0/1/2 剂量，剂量为 0 的变异忽略。</li>
     <li>插入、缺失对照参考做左对齐归一：重复区域中位置写法不同的同一 indel 归为同一等位变异。</li>
     <li>REF 与参考序列不符，或同一文件内同一归一变异存在互相矛盾的剂量时，<strong>整次核对失败</strong>，不展示局部结论。</li>
+  </ul>
+  <p style="margin:14px 0 4px"><strong>单倍型 FASTA 生成</strong></p>
+  <ul>
+    <li>仅接受<strong>单 ALT</strong> 记录：A/C/G/T 单碱基替换，或事件长度不超过 20 bp 的纯插入 / 纯缺失；REF 校验与插缺左对齐归一化与核对流程一致。</li>
+    <li>GT 必须为<strong>二倍体分相写法</strong>（<span class="mono">0|1</span>、<span class="mono">1|0</span>、<span class="mono">1|1</span>、<span class="mono">0|0</span>）；<strong>杂合调用必须携带相同的 PS</strong>（相位集），纯合调用不要求 PS。</li>
+    <li>按 GT 分别编辑两条参考拷贝：<span class="mono">1|0</span> 编辑拷贝 1，<span class="mono">0|1</span> 编辑拷贝 2，<span class="mono">1|1</span> 两条都编辑；所有变异按原参考坐标定位。</li>
+    <li>同一拷贝上变异的<strong>参考跨度（含插缺锚定碱基）交叠</strong>即整批失败；分属不同拷贝的交叠调用仍可正常生成。</li>
+    <li>任何一条记录不满足规则即<strong>整批失败</strong>，不交付任何部分序列；成功后提供带样本名的两份 FASTA 下载。</li>
   </ul>
 </div>
 {% endblock %}
